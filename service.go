@@ -60,6 +60,8 @@ type Service struct {
 	simulate         bool // Dry run (NOP)
 	keepFilesPattern *regexp.Regexp
 
+	folder           string       // Remote dir as public field (!)
+
 	mongoDbURI *url.URL // Can be nil: checksum checks are disabled
 	dbSession  *mgo.Session
 	col        *mgo.Collection
@@ -122,6 +124,7 @@ func Dial(uri string) (*Service, error) {
 	// Default upload URI to the service. Can change at runtime in the
 	// Upload() function for raw file uploading.
 	up, err := url.Parse(fmt.Sprintf("%s/%s/image/upload/", baseUploadUrl, s.cloudName))
+	fmt.Println("URL: ",up)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +208,10 @@ func (s *Service) ApiKey() string {
 // DefaultUploadURI returns the default URI used to upload images to the Cloudinary service.
 func (s *Service) DefaultUploadURI() *url.URL {
 	return s.uploadURI
+}
+
+func (s *Service) SetFolder(str string) {
+	s.folder = str
 }
 
 // cleanAssetName returns an asset name from the parent dirname and
@@ -338,20 +345,41 @@ func (s *Service) uploadFile(fullPath string, data io.Reader, randomPublicId boo
 	}
 	ts.Write([]byte(timestamp))
 
+	// Write upload preset
+	
+	up_preset := "profile_pics"
+	up,err := w.CreateFormField("upload_preset")
+	if err != nil {
+		return fullPath, err
+	}
+	up.Write([]byte(up_preset))
+
+
 	// Write signature
 	hash := sha1.New()
-	part := fmt.Sprintf("timestamp=%s%s", timestamp, s.apiSecret)
+	part := fmt.Sprintf("upload_preset=%s&%s",up_preset,s.apiSecret)
+	part = fmt.Sprintf("timestamp=%s%s", timestamp, part)
 	if !randomPublicId {
 		part = fmt.Sprintf("public_id=%s&%s", publicId, part)
 	}
+	fmt.Println("Sign input: %s",part)
 	io.WriteString(hash, part)
 	signature := fmt.Sprintf("%x", hash.Sum(nil))
-
+	fmt.Println("Signature: %x",signature)
 	si, err := w.CreateFormField("signature")
 	if err != nil {
 		return fullPath, err
 	}
 	si.Write([]byte(signature))
+
+	// Write folder field
+	if s.folder != "" {
+		fd, err := w.CreateFormField("folder")
+		if err != nil {
+			return fullPath, err
+		}
+		fd.Write([]byte(s.folder))
+	}
 
 	// Write file field
 	fw, err := w.CreateFormFile("file", fullPath)
